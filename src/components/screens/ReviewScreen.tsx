@@ -132,19 +132,33 @@ export function ReviewScreen() {
   ];
 
   // Function: klik error → scroll & highlight field
+  // Pakai data-error-key attribute + querySelector dengan retry mechanism
   const jumpToError = useCallback(
     (errorKey: string, anggotaId?: string) => {
+      // Set tab ke anggota kalau error ada di anggota
       if (anggotaId) {
         setActiveTab("anggota");
       }
-      setTimeout(() => {
-        const el = document.querySelector(`[data-error-key="${errorKey}"]`);
+
+      // Retry mechanism: coba cari element beberapa kali dengan delay increasing
+      // (Radix Tabs butuh waktu untuk render content tab yang baru)
+      const tryScroll = (attempt: number) => {
+        const el = document.querySelector(
+          `[data-error-key="${errorKey}"]`,
+        ) as HTMLElement | null;
         if (el) {
           el.scrollIntoView({ behavior: "smooth", block: "center" });
           setHighlightedField(errorKey);
           setTimeout(() => setHighlightedField(null), 3000);
+          return;
         }
-      }, 200);
+        // Retry sampai 5 kali dengan delay 100ms, 300ms, 500ms, 700ms, 900ms
+        if (attempt < 5) {
+          setTimeout(() => tryScroll(attempt + 1), 200 + attempt * 200);
+        }
+      };
+      // Mulai dengan delay awal 300ms (tunggu tab switch selesai)
+      setTimeout(() => tryScroll(0), 300);
     },
     [],
   );
@@ -345,27 +359,28 @@ export function ReviewScreen() {
 
       {/* Error navigation panel — list error yang clickable */}
       {errorCount > 0 && (
-        <div className="flex-shrink-0 bg-red-50 border-b border-red-200 px-3 py-2">
-          <div className="flex items-center gap-1.5 mb-1.5">
-            <AlertCircle className="w-3.5 h-3.5 text-red-600" />
+        <div className="flex-shrink-0 bg-red-50 border-b border-red-200 px-3 py-2.5 relative z-20">
+          <div className="flex items-center gap-1.5 mb-2">
+            <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0" />
             <span className="text-xs font-semibold text-red-700">
-              {errorCount} {errorCount === 1 ? "error" : "error"} — klik untuk loncat ke field:
+              {errorCount} error — ketuk untuk loncat ke field:
             </span>
           </div>
-          <div className="flex flex-wrap gap-1.5">
+          <div className="flex flex-wrap gap-2">
             {errorList.map((err) => (
               <button
                 key={err.key}
                 onClick={() => jumpToError(err.key, err.anggotaId)}
-                className={`inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full border transition-all ${
+                type="button"
+                className={`inline-flex items-center gap-1 text-xs px-3 py-2 rounded-lg border-2 cursor-pointer transition-all active:scale-95 ${
                   highlightedField === err.key
-                    ? "bg-red-600 text-white border-red-600 scale-105"
-                    : "bg-white text-red-700 border-red-300 hover:bg-red-100"
+                    ? "bg-red-600 text-white border-red-600"
+                    : "bg-white text-red-700 border-red-300 hover:bg-red-100 hover:border-red-400"
                 }`}
               >
-                <span className="font-medium">{err.field}</span>
+                <span className="font-semibold">{err.field}</span>
                 {err.nama && (
-                  <span className="opacity-70 truncate max-w-[80px]">
+                  <span className="opacity-70 truncate max-w-[100px]">
                     • {err.nama}
                   </span>
                 )}
