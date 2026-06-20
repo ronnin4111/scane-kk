@@ -5,7 +5,6 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import ZAI from "z-ai-web-dev-sdk";
 import type { Keluarga, AnggotaKeluarga } from "@/lib/types";
 import { deskewImageServer } from "@/lib/server-deskew";
 import { parseNIK } from "@/lib/nik-parser";
@@ -106,8 +105,49 @@ HANYA kembalikan JSON, tanpa penjelasan tambahan, tanpa markdown code blocks.`;
 async function ocrWithZaiVision(
   imageDataUrl: string,
 ): Promise<{ content: string; provider: string }> {
-  const zai = await ZAI.create();
+  // Dynamic import
+  const ZAI = (await import("z-ai-web-dev-sdk")).default;
 
+  // ============================================================
+  // Resolve Z.AI config (mirip pola sipbd-mempawah/ai-sdk.ts):
+  // 1. Environment variables (works on Vercel) — PRIORITY
+  // 2. File system (.z-ai-config) — works in sandbox
+  // 3. SDK auto-discovery (ZAI.create()) — works in sandbox
+  // ============================================================
+
+  const baseUrl = process.env.ZAI_BASE_URL;
+  const apiKey = process.env.ZAI_API_KEY;
+
+  let zai: InstanceType<typeof ZAI>;
+
+  if (baseUrl && apiKey) {
+    // Priority 1: Use env vars (production / Vercel)
+    const config: Record<string, string> = { baseUrl, apiKey };
+    if (process.env.ZAI_CHAT_ID) config.chatId = process.env.ZAI_CHAT_ID;
+    if (process.env.ZAI_USER_ID) config.userId = process.env.ZAI_USER_ID;
+    if (process.env.ZAI_TOKEN) config.token = process.env.ZAI_TOKEN;
+    zai = new ZAI(config as any);
+    console.log(
+      `[OCR] Z.AI initialized via env vars: baseUrl=${baseUrl.substring(0, 30)}...`,
+    );
+  } else {
+    // Priority 2 & 3: Try SDK auto-discovery (works in sandbox with .z-ai-config)
+    try {
+      zai = await ZAI.create();
+      console.log("[OCR] Z.AI initialized via SDK auto-discovery (sandbox mode)");
+    } catch (sdkError) {
+      const errMsg =
+        sdkError instanceof Error ? sdkError.message : "Unknown error";
+      throw new Error(
+        `Z.AI config not found: ${errMsg.substring(0, 200)}. ` +
+          `Set ZAI_BASE_URL=https://api.z.ai/api/v1 and ZAI_API_KEY in env vars. ` +
+          `Get API key at https://chat.z.ai → Settings → API Keys. ` +
+          `(JANGAN pakai https://chat.z.ai/api/v1 — itu web frontend!)`,
+      );
+    }
+  }
+
+  // Timeout 50 detik — kalau lebih, lempar error agar fallback jalan
   const timeoutPromise = new Promise<never>((_, reject) => {
     setTimeout(
       () => reject(new Error("Z.AI timeout (50s) — coba fallback provider")),
@@ -475,10 +515,15 @@ export async function POST(req: NextRequest): Promise<NextResponse<OCRResponse>>
 }
 
 export async function GET(): Promise<NextResponse> {
+  // Cek status Z.AI (env vars atau file)
+  const zaiBaseUrl = process.env.ZAI_BASE_URL;
+  const zaiApiKey = process.env.ZAI_API_KEY;
+  const zaiStatus = zaiBaseUrl && zaiApiKey ? "available (env)" : "available (sandbox auto)";
+
   return NextResponse.json({
     status: "ok",
     providers: {
-      zai: "available",
+      zai: zaiStatus,
       gemini: process.env.GEMINI_API_KEY ? "available" : "not configured",
     },
     timestamp: new Date().toISOString(),
