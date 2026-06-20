@@ -41,7 +41,6 @@ Field-field di bawah akan diisi OTOMATIS dari NIK di backend (lebih akurat & cep
 
 Untuk setiap ANGGOTA:
 - jenisKelamin: "" (akan diisi dari NIK)
-- tempatLahir: "" (akan diisi dari NIK atau biarkan kosong)
 - tanggalLahir: "" (akan diisi dari NIK)
 
 Untuk ALAMAT KK:
@@ -49,7 +48,8 @@ Untuk ALAMAT KK:
 - kabupaten: "" (akan diisi dari NIK kepala keluarga)
 - kecamatan: "" (akan diisi dari NIK kepala keluarga)
 
-**Fokus baca field ini saja:**
+**TETAP BACA field ini (TIDAK bisa di-auto-fill dari NIK):**
+- tempatLahir (WAJIB baca dari KK — NIK tidak mengandung tempat lahir)
 - noKK (16 digit)
 - NIK setiap anggota (16 digit, SANGAT TELITI)
 - Nama setiap anggota (HURUF KAPITAL)
@@ -86,7 +86,7 @@ Untuk ALAMAT KK:
       "nik": "16 digit",
       "nama": "NAMA LENGKAP",
       "jenisKelamin": "",
-      "tempatLahir": "",
+      "tempatLahir": "TEMPAT LAHIR (baca dari KK)",
       "tanggalLahir": "",
       "agama": "ISLAM",
       "pendidikan": "...",
@@ -106,45 +106,91 @@ async function ocrWithZaiVision(
   imageDataUrl: string,
 ): Promise<{ content: string; provider: string }> {
   // ============================================================
-  // Z.AI Vision API — pakai endpoint yang benar
-  // Reference: https://docs.z.ai/api-reference/llm/chat-completion
-  // Model vision yang tersedia:
-  //   - glm-4.6v-flash (FREE, recommended untuk OCR)
-  //   - glm-5v-turbo (lebih canggih, berbayar)
-  //   - glm-ocr (khusus OCR, pakai endpoint /paas/v4/layout_parsing)
+  // Z.AI Vision — support 2 mode:
+  //
+  // MODE 1: Production (Vercel) — pakai env vars
+  //   Endpoint: https://api.z.ai/api/paas/v4/chat/completions
+  //   Model: glm-4.6v-flash (FREE)
+  //   Auth: Bearer <ZAI_API_KEY>
+  //
+  // MODE 2: Sandbox (Z.ai internal) — pakai SDK auto-discovery
+  //   Pakai ZAI.create() yang baca .z-ai-config dari /etc/.z-ai-config
+  //   Endpoint: https://internal-api.z.ai/v1/chat/completions/vision
+  //   Model: GLM-4V (auto-selected)
   // ============================================================
 
-  const baseUrl = process.env.ZAI_BASE_URL || "https://api.z.ai/api";
+  const baseUrl = process.env.ZAI_BASE_URL;
   const apiKey = process.env.ZAI_API_KEY;
 
-  if (!apiKey) {
-    throw new Error(
-      "ZAI_API_KEY belum diset di environment variables. Dapatkan API key di https://chat.z.ai → Settings → API Keys",
-    );
+  // ============ MODE 1: Production (env vars set) ============
+  if (baseUrl && apiKey) {
+    const url = `${baseUrl}/paas/v4/chat/completions`;
+    console.log(`[OCR] Z.AI production mode: ${url}, model: glm-4.6v-flash`);
+
+    const requestBody = {
+      model: "glm-4.6v-flash",
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "image_url", image_url: { url: imageDataUrl } },
+            { type: "text", text: KK_EXTRACTION_PROMPT },
+          ],
+        },
+      ],
+      temperature: 0.1,
+      max_tokens: 8192,
+      thinking: { type: "disabled" },
+    };
+
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(
+        () => reject(new Error("Z.AI timeout (50s) — coba fallback Gemini")),
+        50000,
+      );
+    });
+
+    const fetchPromise = fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(requestBody),
+    });
+
+    const res = (await Promise.race([fetchPromise, timeoutPromise])) as Response;
+
+    if (!res.ok) {
+      const errText = await res.text();
+      console.error(`[OCR] Z.AI API error ${res.status}:`, errText.substring(0, 500));
+      let helpfulError = `Z.AI API error ${res.status}: ${errText.substring(0, 300)}`;
+      if (res.status === 401) {
+        helpfulError = `Z.AI API key tidak valid/expired. Cek ZAI_API_KEY. Detail: ${errText.substring(0, 200)}`;
+      } else if (res.status === 404) {
+        helpfulError = `Z.AI endpoint tidak ditemukan. Pastikan ZAI_BASE_URL=https://api.z.ai/api. Detail: ${errText.substring(0, 200)}`;
+      }
+      throw new Error(helpfulError);
+    }
+
+    const json = await res.json();
+    if (json && (json.success === false || json.error)) {
+      const errMsg = json.error?.message || json.msg || "Unknown error";
+      throw new Error(`Z.AI API error: ${errMsg}`);
+    }
+
+    const content = json?.choices?.[0]?.message?.content;
+    if (!content) {
+      throw new Error(`Z.AI response format tidak dikenali. Keys: ${Object.keys(json || {}).join(",")}`);
+    }
+    return { content, provider: "Z.AI GLM-4.6V-Flash" };
   }
 
-  // Endpoint yang benar: /paas/v4/chat/completions (BUKAN /api/v1/chat/completions/vision)
-  const url = `${baseUrl}/paas/v4/chat/completions`;
-  console.log(`[OCR] Z.AI endpoint: ${url}`);
-  console.log(`[OCR] Z.AI model: glm-4.6v-flash (FREE)`);
+  // ============ MODE 2: Sandbox (SDK auto-discovery) ============
+  console.log("[OCR] Z.AI sandbox mode: using SDK auto-discovery");
+  const ZAI = (await import("z-ai-web-dev-sdk")).default;
+  const zai = await ZAI.create();
 
-  const requestBody = {
-    model: "glm-4.6v-flash",
-    messages: [
-      {
-        role: "user",
-        content: [
-          { type: "image_url", image_url: { url: imageDataUrl } },
-          { type: "text", text: KK_EXTRACTION_PROMPT },
-        ],
-      },
-    ],
-    temperature: 0.1,
-    max_tokens: 8192,
-    thinking: { type: "disabled" },
-  };
-
-  // Timeout 50 detik
   const timeoutPromise = new Promise<never>((_, reject) => {
     setTimeout(
       () => reject(new Error("Z.AI timeout (50s) — coba fallback Gemini")),
@@ -152,57 +198,27 @@ async function ocrWithZaiVision(
     );
   });
 
-  const fetchPromise = fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify(requestBody),
-  });
+  const response = (await Promise.race([
+    zai.chat.completions.createVision({
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: KK_EXTRACTION_PROMPT },
+            { type: "image_url", image_url: { url: imageDataUrl } },
+          ],
+        },
+      ],
+      thinking: { type: "disabled" },
+    }),
+    timeoutPromise,
+  ])) as any;
 
-  const res = (await Promise.race([fetchPromise, timeoutPromise])) as Response;
-
-  if (!res.ok) {
-    const errText = await res.text();
-    console.error(
-      `[OCR] Z.AI API error ${res.status}:`,
-      errText.substring(0, 500),
-    );
-
-    let helpfulError = `Z.AI API error ${res.status}: ${errText.substring(0, 300)}`;
-    if (res.status === 401) {
-      helpfulError = `Z.AI API key tidak valid. Cek ZAI_API_KEY di env vars. Detail: ${errText.substring(0, 200)}`;
-    } else if (res.status === 404) {
-      helpfulError = `Z.AI endpoint tidak ditemukan (404). Pastikan ZAI_BASE_URL=https://api.z.ai/api. Detail: ${errText.substring(0, 200)}`;
-    } else if (res.status === 429) {
-      helpfulError = `Z.AI rate limit tercapai. Detail: ${errText.substring(0, 200)}`;
-    }
-    throw new Error(helpfulError);
-  }
-
-  const json = await res.json();
-  console.log(`[OCR] Z.AI response keys: ${Object.keys(json || {}).join(",")}`);
-
-  // Handle Z.AI error response
-  if (json && (json.success === false || json.error)) {
-    const errMsg = json.error?.message || json.msg || "Unknown Z.AI error";
-    throw new Error(`Z.AI API error: ${errMsg}`);
-  }
-
-  // Extract content dari response (format OpenAI-compatible)
-  const content = json?.choices?.[0]?.message?.content;
+  const content = response?.choices?.[0]?.message?.content;
   if (!content) {
-    console.error(
-      "[OCR] Z.AI response tidak terduga:",
-      JSON.stringify(json).substring(0, 500),
-    );
-    throw new Error(
-      `Z.AI response format tidak dikenali. Keys: ${Object.keys(json || {}).join(",")}`,
-    );
+    throw new Error("Z.AI Vision mengembalikan response kosong");
   }
-
-  return { content, provider: "Z.AI GLM-4.6V-Flash" };
+  return { content, provider: "Z.AI GLM-4V" };
 }
 
 async function ocrWithGeminiVision(
