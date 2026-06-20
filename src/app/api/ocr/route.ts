@@ -169,9 +169,41 @@ async function ocrWithZaiVision(
       thinking: { type: "disabled" },
     }),
     timeoutPromise,
-  ])) as { choices?: Array<{ message?: { content?: string } }> };
+  ])) as any;
 
-  const content = response.choices[0]?.message?.content;
+  // Log response structure untuk debugging (tanpa expose content)
+  console.log(
+    `[OCR] Z.AI response type: ${typeof response}, keys: ${Object.keys(response || {}).join(",")}`,
+  );
+
+  // Handle berbagai format response Z.AI
+  let content: string | undefined;
+  if (response?.choices?.[0]?.message?.content) {
+    // Format standar OpenAI
+    content = response.choices[0].message.content;
+  } else if (response?.choices?.[0]?.text) {
+    // Format alternatif
+    content = response.choices[0].text;
+  } else if (response?.output?.text) {
+    // Format lain
+    content = response.output.text;
+  } else if (typeof response === "string") {
+    // Response langsung string
+    content = response;
+  } else if (response?.data?.choices?.[0]?.message?.content) {
+    // Format dengan wrapper data
+    content = response.data.choices[0].message.content;
+  } else {
+    // Log full response untuk debugging (truncated)
+    console.error(
+      "[OCR] Z.AI response tidak terduga:",
+      JSON.stringify(response).substring(0, 500),
+    );
+    throw new Error(
+      `Z.AI response format tidak dikenali. Keys: ${Object.keys(response || {}).join(",")}`,
+    );
+  }
+
   if (!content) {
     throw new Error("Z.AI Vision mengembalikan response kosong");
   }
