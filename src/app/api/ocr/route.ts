@@ -176,25 +176,37 @@ async function ocrWithZaiVision(
     `[OCR] Z.AI response type: ${typeof response}, keys: ${Object.keys(response || {}).join(",")}`,
   );
 
-  // Handle berbagai format response Z.AI
+  // Handle Z.AI error response (format: {code, msg, success: false})
+  if (response && (response.success === false || response.code)) {
+    const errMsg = response.msg || response.message || "Unknown Z.AI error";
+    const code = response.code || "unknown";
+    console.error(`[OCR] Z.AI API error code=${code}:`, errMsg.substring(0, 300));
+
+    // Beri pesan error yang helpful
+    let helpfulError = `Z.AI API error (code ${code}): ${errMsg}`;
+    if (code === 1000 || code === 401 || errMsg.includes("Authentication")) {
+      helpfulError = `Z.AI API key tidak valid atau expired. Cek ZAI_API_KEY di Vercel env vars. Detail: ${errMsg}`;
+    } else if (code === 404 || errMsg.includes("not found")) {
+      helpfulError = `Z.AI API endpoint tidak ditemukan. Pastikan ZAI_BASE_URL=https://api.z.ai/api/v1. Detail: ${errMsg}`;
+    } else if (code === 429 || errMsg.includes("rate")) {
+      helpfulError = `Z.AI rate limit tercapai. Coba lagi nanti atau pakai Gemini fallback. Detail: ${errMsg}`;
+    }
+    throw new Error(helpfulError);
+  }
+
+  // Handle berbagai format response Z.AI yang sukses
   let content: string | undefined;
   if (response?.choices?.[0]?.message?.content) {
-    // Format standar OpenAI
     content = response.choices[0].message.content;
   } else if (response?.choices?.[0]?.text) {
-    // Format alternatif
     content = response.choices[0].text;
   } else if (response?.output?.text) {
-    // Format lain
     content = response.output.text;
   } else if (typeof response === "string") {
-    // Response langsung string
     content = response;
   } else if (response?.data?.choices?.[0]?.message?.content) {
-    // Format dengan wrapper data
     content = response.data.choices[0].message.content;
   } else {
-    // Log full response untuk debugging (truncated)
     console.error(
       "[OCR] Z.AI response tidak terduga:",
       JSON.stringify(response).substring(0, 500),
