@@ -105,121 +105,104 @@ HANYA kembalikan JSON, tanpa penjelasan tambahan, tanpa markdown code blocks.`;
 async function ocrWithZaiVision(
   imageDataUrl: string,
 ): Promise<{ content: string; provider: string }> {
-  // Dynamic import
-  const ZAI = (await import("z-ai-web-dev-sdk")).default;
-
   // ============================================================
-  // Resolve Z.AI config (mirip pola sipbd-mempawah/ai-sdk.ts):
-  // 1. Environment variables (works on Vercel) — PRIORITY
-  // 2. File system (.z-ai-config) — works in sandbox
-  // 3. SDK auto-discovery (ZAI.create()) — works in sandbox
+  // Z.AI Vision API — pakai endpoint yang benar
+  // Reference: https://docs.z.ai/api-reference/llm/chat-completion
+  // Model vision yang tersedia:
+  //   - glm-4.6v-flash (FREE, recommended untuk OCR)
+  //   - glm-5v-turbo (lebih canggih, berbayar)
+  //   - glm-ocr (khusus OCR, pakai endpoint /paas/v4/layout_parsing)
   // ============================================================
 
-  const baseUrl = process.env.ZAI_BASE_URL;
+  const baseUrl = process.env.ZAI_BASE_URL || "https://api.z.ai/api";
   const apiKey = process.env.ZAI_API_KEY;
 
-  let zai: InstanceType<typeof ZAI>;
-
-  if (baseUrl && apiKey) {
-    // Priority 1: Use env vars (production / Vercel)
-    const config: Record<string, string> = { baseUrl, apiKey };
-    if (process.env.ZAI_CHAT_ID) config.chatId = process.env.ZAI_CHAT_ID;
-    if (process.env.ZAI_USER_ID) config.userId = process.env.ZAI_USER_ID;
-    if (process.env.ZAI_TOKEN) config.token = process.env.ZAI_TOKEN;
-    zai = new ZAI(config as any);
-    console.log(
-      `[OCR] Z.AI initialized via env vars: baseUrl=${baseUrl.substring(0, 30)}...`,
+  if (!apiKey) {
+    throw new Error(
+      "ZAI_API_KEY belum diset di environment variables. Dapatkan API key di https://chat.z.ai → Settings → API Keys",
     );
-  } else {
-    // Priority 2 & 3: Try SDK auto-discovery (works in sandbox with .z-ai-config)
-    try {
-      zai = await ZAI.create();
-      console.log("[OCR] Z.AI initialized via SDK auto-discovery (sandbox mode)");
-    } catch (sdkError) {
-      const errMsg =
-        sdkError instanceof Error ? sdkError.message : "Unknown error";
-      throw new Error(
-        `Z.AI config not found: ${errMsg.substring(0, 200)}. ` +
-          `Set ZAI_BASE_URL=https://api.z.ai/api/v1 and ZAI_API_KEY in env vars. ` +
-          `Get API key at https://chat.z.ai → Settings → API Keys. ` +
-          `(JANGAN pakai https://chat.z.ai/api/v1 — itu web frontend!)`,
-      );
-    }
   }
 
-  // Timeout 50 detik — kalau lebih, lempar error agar fallback jalan
+  // Endpoint yang benar: /paas/v4/chat/completions (BUKAN /api/v1/chat/completions/vision)
+  const url = `${baseUrl}/paas/v4/chat/completions`;
+  console.log(`[OCR] Z.AI endpoint: ${url}`);
+  console.log(`[OCR] Z.AI model: glm-4.6v-flash (FREE)`);
+
+  const requestBody = {
+    model: "glm-4.6v-flash",
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "image_url", image_url: { url: imageDataUrl } },
+          { type: "text", text: KK_EXTRACTION_PROMPT },
+        ],
+      },
+    ],
+    temperature: 0.1,
+    max_tokens: 8192,
+    thinking: { type: "disabled" },
+  };
+
+  // Timeout 50 detik
   const timeoutPromise = new Promise<never>((_, reject) => {
     setTimeout(
-      () => reject(new Error("Z.AI timeout (50s) — coba fallback provider")),
+      () => reject(new Error("Z.AI timeout (50s) — coba fallback Gemini")),
       50000,
     );
   });
 
-  const response = (await Promise.race([
-    zai.chat.completions.createVision({
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: KK_EXTRACTION_PROMPT },
-            { type: "image_url", image_url: { url: imageDataUrl } },
-          ],
-        },
-      ],
-      thinking: { type: "disabled" },
-    }),
-    timeoutPromise,
-  ])) as any;
+  const fetchPromise = fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(requestBody),
+  });
 
-  // Log response structure untuk debugging (tanpa expose content)
-  console.log(
-    `[OCR] Z.AI response type: ${typeof response}, keys: ${Object.keys(response || {}).join(",")}`,
-  );
+  const res = (await Promise.race([fetchPromise, timeoutPromise])) as Response;
 
-  // Handle Z.AI error response (format: {code, msg, success: false})
-  if (response && (response.success === false || response.code)) {
-    const errMsg = response.msg || response.message || "Unknown Z.AI error";
-    const code = response.code || "unknown";
-    console.error(`[OCR] Z.AI API error code=${code}:`, errMsg.substring(0, 300));
+  if (!res.ok) {
+    const errText = await res.text();
+    console.error(
+      `[OCR] Z.AI API error ${res.status}:`,
+      errText.substring(0, 500),
+    );
 
-    // Beri pesan error yang helpful
-    let helpfulError = `Z.AI API error (code ${code}): ${errMsg}`;
-    if (code === 1000 || code === 401 || errMsg.includes("Authentication")) {
-      helpfulError = `Z.AI API key tidak valid atau expired. Cek ZAI_API_KEY di Vercel env vars. Detail: ${errMsg}`;
-    } else if (code === 404 || errMsg.includes("not found")) {
-      helpfulError = `Z.AI API endpoint tidak ditemukan. Pastikan ZAI_BASE_URL=https://api.z.ai/api/v1. Detail: ${errMsg}`;
-    } else if (code === 429 || errMsg.includes("rate")) {
-      helpfulError = `Z.AI rate limit tercapai. Coba lagi nanti atau pakai Gemini fallback. Detail: ${errMsg}`;
+    let helpfulError = `Z.AI API error ${res.status}: ${errText.substring(0, 300)}`;
+    if (res.status === 401) {
+      helpfulError = `Z.AI API key tidak valid. Cek ZAI_API_KEY di env vars. Detail: ${errText.substring(0, 200)}`;
+    } else if (res.status === 404) {
+      helpfulError = `Z.AI endpoint tidak ditemukan (404). Pastikan ZAI_BASE_URL=https://api.z.ai/api. Detail: ${errText.substring(0, 200)}`;
+    } else if (res.status === 429) {
+      helpfulError = `Z.AI rate limit tercapai. Detail: ${errText.substring(0, 200)}`;
     }
     throw new Error(helpfulError);
   }
 
-  // Handle berbagai format response Z.AI yang sukses
-  let content: string | undefined;
-  if (response?.choices?.[0]?.message?.content) {
-    content = response.choices[0].message.content;
-  } else if (response?.choices?.[0]?.text) {
-    content = response.choices[0].text;
-  } else if (response?.output?.text) {
-    content = response.output.text;
-  } else if (typeof response === "string") {
-    content = response;
-  } else if (response?.data?.choices?.[0]?.message?.content) {
-    content = response.data.choices[0].message.content;
-  } else {
+  const json = await res.json();
+  console.log(`[OCR] Z.AI response keys: ${Object.keys(json || {}).join(",")}`);
+
+  // Handle Z.AI error response
+  if (json && (json.success === false || json.error)) {
+    const errMsg = json.error?.message || json.msg || "Unknown Z.AI error";
+    throw new Error(`Z.AI API error: ${errMsg}`);
+  }
+
+  // Extract content dari response (format OpenAI-compatible)
+  const content = json?.choices?.[0]?.message?.content;
+  if (!content) {
     console.error(
       "[OCR] Z.AI response tidak terduga:",
-      JSON.stringify(response).substring(0, 500),
+      JSON.stringify(json).substring(0, 500),
     );
     throw new Error(
-      `Z.AI response format tidak dikenali. Keys: ${Object.keys(response || {}).join(",")}`,
+      `Z.AI response format tidak dikenali. Keys: ${Object.keys(json || {}).join(",")}`,
     );
   }
 
-  if (!content) {
-    throw new Error("Z.AI Vision mengembalikan response kosong");
-  }
-  return { content, provider: "Z.AI GLM-4V" };
+  return { content, provider: "Z.AI GLM-4.6V-Flash" };
 }
 
 async function ocrWithGeminiVision(
@@ -466,17 +449,18 @@ export async function POST(req: NextRequest): Promise<NextResponse<OCRResponse>>
     }
 
     // Provider priority untuk OCR Vision:
-    // 1. Gemini (PRIMARY) — Z.AI production API tidak support /chat/completions/vision (404)
-    //    Gemini 2.0 Flash Vision reliable & gratis (1500 req/hari)
-    // 2. Z.AI (FALLBACK) — hanya jalan di sandbox dev (pakai .z-ai-config internal)
+    // 1. Z.AI GLM-4.6V-Flash (PRIMARY) — FREE, support vision di production
+    //    Endpoint: https://api.z.ai/api/paas/v4/chat/completions
+    //    Model: glm-4.6v-flash (gratis, 128k context)
+    // 2. Gemini 2.0 Flash Vision (FALLBACK) — jika Z.AI gagal
     const providers: Array<{
       name: string;
       fn: () => Promise<{ content: string; provider: string }>;
     }> = [
+      { name: "Z.AI", fn: () => ocrWithZaiVision(processedImage) },
       ...(process.env.GEMINI_API_KEY
         ? [{ name: "Gemini", fn: () => ocrWithGeminiVision(processedImage) }]
         : []),
-      { name: "Z.AI", fn: () => ocrWithZaiVision(processedImage) },
     ];
 
     let lastError: string | undefined;
@@ -580,16 +564,21 @@ export async function POST(req: NextRequest): Promise<NextResponse<OCRResponse>>
 }
 
 export async function GET(): Promise<NextResponse> {
-  // Cek status Z.AI (env vars atau file)
-  const zaiBaseUrl = process.env.ZAI_BASE_URL;
   const zaiApiKey = process.env.ZAI_API_KEY;
-  const zaiStatus = zaiBaseUrl && zaiApiKey ? "available (env)" : "available (sandbox auto)";
+  const zaiBaseUrl = process.env.ZAI_BASE_URL || "https://api.z.ai/api";
+  const zaiStatus = zaiApiKey
+    ? `available (model: glm-4.6v-flash, endpoint: ${zaiBaseUrl}/paas/v4/chat/completions)`
+    : "not configured (set ZAI_API_KEY)";
 
   return NextResponse.json({
     status: "ok",
     providers: {
       zai: zaiStatus,
       gemini: process.env.GEMINI_API_KEY ? "available" : "not configured",
+    },
+    models: {
+      zai: "glm-4.6v-flash (FREE)",
+      gemini: "gemini-2.0-flash",
     },
     timestamp: new Date().toISOString(),
   });
