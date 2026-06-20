@@ -502,10 +502,19 @@ export async function POST(req: NextRequest): Promise<NextResponse<OCRResponse>>
     }
 
     if (!rawContent) {
+      // Beri pesan error yang sangat helpful berdasarkan error terakhir
+      let helpfulError = `Semua provider gagal. Error terakhir: ${lastError}`;
+      if (lastError && lastError.includes("API key not valid")) {
+        helpfulError =
+          "Gemini API key tidak valid. Silakan generate API key baru di https://aistudio.google.com/apikey lalu update GEMINI_API_KEY di Vercel env vars (https://vercel.com/ronnin4111s-projects/scan-kk/settings/env-variables). Setelah itu redeploy.";
+      } else if (lastError && lastError.includes("404 NOT_FOUND")) {
+        helpfulError =
+          "Z.AI production API tidak support vision endpoint. Pastikan GEMINI_API_KEY diset dengan API key yang valid dari https://aistudio.google.com/apikey";
+      }
       return NextResponse.json(
         {
           success: false,
-          error: `Semua provider gagal. Error terakhir: ${lastError}`,
+          error: helpfulError,
           durationMs: Date.now() - startTime,
           deskewInfo,
         },

@@ -117,10 +117,10 @@ export async function deskewImageServer(
 ): Promise<DeskewResult> {
   const { minConfidence = 0.02, minAngleToCorrect = 0.5 } = options ?? {};
 
-  const match = imageDataUrl.match(/^data:(image\/[a-z]+);base64,(.+)$/);
+  // Handle berbagai format data URL (image/png, image/jpeg, image/webp, dll)
+  const match = imageDataUrl.match(/^data:image\/[a-z+]+;base64,(.+)$/i);
   if (!match) throw new Error("Format data URL tidak valid");
-  const mimeType = match[1];
-  const originalBuffer = Buffer.from(match[2], "base64");
+  const originalBuffer = Buffer.from(match[1], "base64");
 
   console.log("[Server Deskew] Starting skew estimation...");
   const estimationStart = Date.now();
