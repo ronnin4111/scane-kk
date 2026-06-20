@@ -261,12 +261,20 @@ async function ocrWithGeminiVision(
 
   if (!res.ok) {
     const errText = await res.text();
-    throw new Error(`Gemini API error ${res.status}: ${errText.slice(0, 200)}`);
+    console.error(`[OCR] Gemini API error ${res.status}:`, errText.substring(0, 500));
+    throw new Error(`Gemini API error ${res.status}: ${errText.substring(0, 300)}`);
   }
 
   const json = await res.json();
+  console.log(
+    `[OCR] Gemini response keys: ${Object.keys(json || {}).join(",")}`,
+  );
   const content = json?.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!content) {
+    console.error(
+      "[OCR] Gemini response tidak terduga:",
+      JSON.stringify(json).substring(0, 500),
+    );
     throw new Error("Gemini mengembalikan response kosong");
   }
   return { content, provider: "Google Gemini 2.0 Flash" };
