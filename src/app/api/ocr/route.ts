@@ -457,14 +457,18 @@ export async function POST(req: NextRequest): Promise<NextResponse<OCRResponse>>
       );
     }
 
+    // Provider priority untuk OCR Vision:
+    // 1. Gemini (PRIMARY) — Z.AI production API tidak support /chat/completions/vision (404)
+    //    Gemini 2.0 Flash Vision reliable & gratis (1500 req/hari)
+    // 2. Z.AI (FALLBACK) — hanya jalan di sandbox dev (pakai .z-ai-config internal)
     const providers: Array<{
       name: string;
       fn: () => Promise<{ content: string; provider: string }>;
     }> = [
-      { name: "Z.AI", fn: () => ocrWithZaiVision(processedImage) },
       ...(process.env.GEMINI_API_KEY
         ? [{ name: "Gemini", fn: () => ocrWithGeminiVision(processedImage) }]
         : []),
+      { name: "Z.AI", fn: () => ocrWithZaiVision(processedImage) },
     ];
 
     let lastError: string | undefined;
