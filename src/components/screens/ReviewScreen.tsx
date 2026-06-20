@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { useAppStore } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -83,7 +83,6 @@ export function ReviewScreen() {
   const [draft, setDraft] = useState<
     Omit<Keluarga, "id" | "createdBy" | "createdAt" | "updatedAt"> | null
   >(draftKeluarga);
-  const [activeTab, setActiveTab] = useState("kk");
 
   const errors = useMemo(() => {
     if (!draft) return {};
@@ -113,6 +112,87 @@ export function ReviewScreen() {
     if (!hasKepala) e.kepala = "Wajib ada minimal 1 kepala keluarga";
     return e;
   }, [draft, keluargaList]);
+
+  // State untuk track field yang sedang di-highlight (harus sebelum early return)
+  const [highlightedField, setHighlightedField] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState("kk");
+
+  // Daftar saran pendidikan untuk datalist
+  const PENDIDIKAN_SUGGESTIONS = [
+    "TIDAK / BELUM SEKOLAH",
+    "BELUM SEKOLAH",
+    "SD / SEDERAJAT",
+    "SLTP / SEDERAJAT",
+    "SLTA / SEDERAJAT",
+    "DIPLOMA I/II",
+    "DIPLOMA III",
+    "SARJANA (S1)",
+    "S2",
+    "S3",
+  ];
+
+  // Function: klik error → scroll & highlight field
+  const jumpToError = useCallback(
+    (errorKey: string, anggotaId?: string) => {
+      if (anggotaId) {
+        setActiveTab("anggota");
+      }
+      setTimeout(() => {
+        const el = document.querySelector(`[data-error-key="${errorKey}"]`);
+        if (el) {
+          el.scrollIntoView({ behavior: "smooth", block: "center" });
+          setHighlightedField(errorKey);
+          setTimeout(() => setHighlightedField(null), 3000);
+        }
+      }, 200);
+    },
+    [],
+  );
+
+  // Build list of errors yang clickable untuk navigation
+  const errorList = useMemo(() => {
+    if (!draft) return [];
+    const list: Array<{
+      key: string;
+      message: string;
+      anggotaId?: string;
+      field: string;
+      nama?: string;
+    }> = [];
+
+    for (const [errorKey, message] of Object.entries(errors)) {
+      let anggotaId: string | undefined;
+      let nama: string | undefined;
+      let field = errorKey;
+
+      if (errorKey.startsWith("anggota_")) {
+        const parts = errorKey.split("_");
+        anggotaId = parts.slice(1, -1).join("_");
+        const anggota = draft.anggota.find((a) => a.id === anggotaId);
+        nama = anggota?.nama || `Anggota ${anggotaId}`;
+        field = parts[parts.length - 1];
+        const fieldLabels: Record<string, string> = {
+          nik: "NIK",
+          nama: "Nama",
+          tanggalLahir: "Tanggal Lahir",
+        };
+        field = fieldLabels[field] || field;
+      } else {
+        const fieldLabels: Record<string, string> = {
+          noKK: "Nomor KK",
+          provinsi: "Provinsi",
+          kabupaten: "Kabupaten",
+          kecamatan: "Kecamatan",
+          kelurahan: "Kelurahan",
+          kodePos: "Kode Pos",
+          kepala: "Kepala Keluarga",
+        };
+        field = fieldLabels[errorKey] || errorKey;
+      }
+      list.push({ key: errorKey, message, anggotaId, field, nama });
+    }
+    return list;
+  }, [errors, draft]);
 
   if (!draft) {
     return (
@@ -263,6 +343,38 @@ export function ReviewScreen() {
         </div>
       )}
 
+      {/* Error navigation panel — list error yang clickable */}
+      {errorCount > 0 && (
+        <div className="flex-shrink-0 bg-red-50 border-b border-red-200 px-3 py-2">
+          <div className="flex items-center gap-1.5 mb-1.5">
+            <AlertCircle className="w-3.5 h-3.5 text-red-600" />
+            <span className="text-xs font-semibold text-red-700">
+              {errorCount} {errorCount === 1 ? "error" : "error"} — klik untuk loncat ke field:
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {errorList.map((err) => (
+              <button
+                key={err.key}
+                onClick={() => jumpToError(err.key, err.anggotaId)}
+                className={`inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full border transition-all ${
+                  highlightedField === err.key
+                    ? "bg-red-600 text-white border-red-600 scale-105"
+                    : "bg-white text-red-700 border-red-300 hover:bg-red-100"
+                }`}
+              >
+                <span className="font-medium">{err.field}</span>
+                {err.nama && (
+                  <span className="opacity-70 truncate max-w-[80px]">
+                    • {err.nama}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       <Tabs
         value={activeTab}
         onValueChange={setActiveTab}
@@ -282,7 +394,12 @@ export function ReviewScreen() {
         <TabsContent value="kk" className="flex-1 overflow-y-auto p-4 mt-0 space-y-4 pb-24">
           <Card>
             <CardContent className="p-4 space-y-3">
-              <div className="space-y-1.5">
+              <div
+                data-error-key="noKK"
+                className={`space-y-1.5 rounded-lg p-1 -m-1 transition-all ${
+                  highlightedField === "noKK" ? "bg-red-100 ring-2 ring-red-400" : ""
+                }`}
+              >
                 <Label htmlFor="noKK" className="text-sm font-medium">
                   Nomor KK <span className="text-destructive">*</span>
                 </Label>
@@ -346,6 +463,8 @@ export function ReviewScreen() {
                     value={draft.alamat.provinsi}
                     onChange={(v) => updateAlamat("provinsi", v)}
                     error={errors.provinsi}
+                    dataErrorKey="provinsi"
+                    highlighted={highlightedField === "provinsi"}
                   />
                   <FormField
                     label="Kabupaten/Kota"
@@ -353,6 +472,8 @@ export function ReviewScreen() {
                     value={draft.alamat.kabupaten}
                     onChange={(v) => updateAlamat("kabupaten", v)}
                     error={errors.kabupaten}
+                    dataErrorKey="kabupaten"
+                    highlighted={highlightedField === "kabupaten"}
                   />
                 </div>
                 <div className="grid grid-cols-2 gap-3">
@@ -362,6 +483,8 @@ export function ReviewScreen() {
                     value={draft.alamat.kecamatan}
                     onChange={(v) => updateAlamat("kecamatan", v)}
                     error={errors.kecamatan}
+                    dataErrorKey="kecamatan"
+                    highlighted={highlightedField === "kecamatan"}
                   />
                   <FormField
                     label="Kelurahan/Desa"
@@ -369,6 +492,8 @@ export function ReviewScreen() {
                     value={draft.alamat.kelurahan}
                     onChange={(v) => updateAlamat("kelurahan", v)}
                     error={errors.kelurahan}
+                    dataErrorKey="kelurahan"
+                    highlighted={highlightedField === "kelurahan"}
                   />
                 </div>
                 <div className="grid grid-cols-3 gap-3">
@@ -389,6 +514,8 @@ export function ReviewScreen() {
                       updateAlamat("kodePos", v.replace(/\D/g, "").slice(0, 5))
                     }
                     error={errors.kodePos}
+                    dataErrorKey="kodePos"
+                    highlighted={highlightedField === "kodePos"}
                   />
                 </div>
                 <FormField
@@ -419,6 +546,8 @@ export function ReviewScreen() {
               errors={errors}
               onUpdate={(data) => updateAnggota(anggota.id, data)}
               onRemove={() => removeAnggota(anggota.id)}
+              highlightedField={highlightedField}
+              pendidikanSuggestions={PENDIDIKAN_SUGGESTIONS}
             />
           ))}
 
@@ -460,6 +589,8 @@ function FormField({
   error,
   required,
   placeholder,
+  dataErrorKey,
+  highlighted,
 }: {
   label: string;
   value: string;
@@ -467,9 +598,16 @@ function FormField({
   error?: string;
   required?: boolean;
   placeholder?: string;
+  dataErrorKey?: string;
+  highlighted?: boolean;
 }) {
   return (
-    <div className="space-y-1">
+    <div
+      data-error-key={dataErrorKey}
+      className={`space-y-1 rounded-lg p-1 -m-1 transition-all ${
+        highlighted ? "bg-red-100 ring-2 ring-red-400" : ""
+      }`}
+    >
       <Label className="text-xs text-muted-foreground">
         {label} {required && <span className="text-destructive">*</span>}
       </Label>
@@ -495,19 +633,24 @@ function AnggotaEditor({
   errors,
   onUpdate,
   onRemove,
+  highlightedField,
+  pendidikanSuggestions,
 }: {
   anggota: AnggotaKeluarga;
   index: number;
   errors: Record<string, string>;
   onUpdate: (data: Partial<AnggotaKeluarga>) => void;
   onRemove: () => void;
+  highlightedField: string | null;
+  pendidikanSuggestions: string[];
 }) {
-  const [expanded, setExpanded] = useState(index === 0);
-  const isKepala = anggota.statusHubungan === "KEPALA KELUARGA";
-
   const errNik = errors[`anggota_${anggota.id}_nik`];
   const errNama = errors[`anggota_${anggota.id}_nama`];
   const errTanggal = errors[`anggota_${anggota.id}_tanggalLahir`];
+  // Auto-expand kalau ada error di anggota ini
+  const hasError = !!(errNik || errNama || errTanggal);
+  const [expanded, setExpanded] = useState(index === 0 || hasError);
+  const isKepala = anggota.statusHubungan === "KEPALA KELUARGA";
 
   return (
     <Card
@@ -550,7 +693,14 @@ function AnggotaEditor({
       {expanded && (
         <CardContent className="p-4 pt-0 space-y-3">
           <div className="grid grid-cols-2 gap-3">
-            <div className="col-span-2 space-y-1">
+            <div
+              data-error-key={`anggota_${anggota.id}_nik`}
+              className={`col-span-2 space-y-1 rounded-lg p-1 -m-1 transition-all ${
+                highlightedField === `anggota_${anggota.id}_nik`
+                  ? "bg-red-100 ring-2 ring-red-400"
+                  : ""
+              }`}
+            >
               <Label className="text-xs text-muted-foreground">
                 NIK <span className="text-destructive">*</span>
               </Label>
@@ -571,7 +721,14 @@ function AnggotaEditor({
                 </p>
               )}
             </div>
-            <div className="col-span-2 space-y-1">
+            <div
+              data-error-key={`anggota_${anggota.id}_nama`}
+              className={`col-span-2 space-y-1 rounded-lg p-1 -m-1 transition-all ${
+                highlightedField === `anggota_${anggota.id}_nama`
+                  ? "bg-red-100 ring-2 ring-red-400"
+                  : ""
+              }`}
+            >
               <Label className="text-xs text-muted-foreground">
                 Nama Lengkap <span className="text-destructive">*</span>
               </Label>
@@ -633,7 +790,14 @@ function AnggotaEditor({
                 className="text-sm h-10"
               />
             </div>
-            <div className="space-y-1">
+            <div
+              data-error-key={`anggota_${anggota.id}_tanggalLahir`}
+              className={`space-y-1 rounded-lg p-1 -m-1 transition-all ${
+                highlightedField === `anggota_${anggota.id}_tanggalLahir`
+                  ? "bg-red-100 ring-2 ring-red-400"
+                  : ""
+              }`}
+            >
               <Label className="text-xs text-muted-foreground flex items-center justify-between">
                 <span>Tanggal Lahir</span>
                 {anggota.nik.length === 16 &&
@@ -712,19 +876,18 @@ function AnggotaEditor({
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
               <Label className="text-xs text-muted-foreground">Pendidikan</Label>
-              <Select
+              <Input
+                list={`pendidikan-list-${anggota.id}`}
                 value={anggota.pendidikan}
-                onValueChange={(v) => onUpdate({ pendidikan: v })}
-              >
-                <SelectTrigger className="h-10 text-sm">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {PENDIDIKAN_OPTIONS.map((o) => (
-                    <SelectItem key={o} value={o}>{o}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                onChange={(e) => onUpdate({ pendidikan: e.target.value.toUpperCase() })}
+                placeholder="Ketik atau pilih pendidikan"
+                className="text-sm h-10"
+              />
+              <datalist id={`pendidikan-list-${anggota.id}`}>
+                {pendidikanSuggestions.map((s) => (
+                  <option key={s} value={s} />
+                ))}
+              </datalist>
             </div>
             <div className="space-y-1">
               <Label className="text-xs text-muted-foreground">Pekerjaan</Label>
