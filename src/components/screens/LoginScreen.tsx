@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent } from "@/components/ui/card";
-import { Camera, FileText, ShieldCheck, Loader2 } from "lucide-react";
+import { FileText, ShieldCheck, Loader2 } from "lucide-react";
 
 export function LoginScreen() {
   const login = useAppStore((s) => s.login);
@@ -119,19 +119,6 @@ export function LoginScreen() {
                 <p className="text-sm font-medium text-emerald-900">Demo Akun</p>
                 <p className="text-xs text-emerald-700 mt-0.5">
                   Email &amp; password apa saja yang valid bisa masuk untuk demo ini.
-                </p>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="bg-muted/40 border-border">
-            <CardContent className="p-4 flex items-start gap-3">
-              <Camera className="w-5 h-5 text-primary flex-shrink-0 mt-0.5" />
-              <div>
-                <p className="text-sm font-medium">Powered by Gemini Vision</p>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  Foto KK diproses oleh AI Google Gemini 2.0 Flash untuk akurasi
-                  tinggi.
                 </p>
               </div>
             </CardContent>
